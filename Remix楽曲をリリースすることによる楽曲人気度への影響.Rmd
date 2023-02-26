@@ -1,0 +1,284 @@
+---
+title: "Remix楽曲をリリースすることによる楽曲人気度への影響"
+author: "nijigen-plot"
+date: '2023-02-26'
+output: 
+  html_document:
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(readr)
+library(knitr)
+library(withr)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+adf <- read_csv(file = "data/remix_artist_comparison_df.csv")
+df <- read_csv(file = "data/target_tracks.csv")
+rdf <- read_csv(file = "data/artist_avg_popularity.csv")
+# popularityの差を作成
+adf <- adf %>% mutate(popularity_diff = popularity - avg_popularity)
+
+# Remixされた側とした側の平均popularity同士を比較するためのマージ
+adf <- inner_join(
+  adf,
+  rdf,
+  by = c("main_artist" = "artist"),
+  suffix = c("_r", "_o")
+)
+
+adf <- adf %>% mutate(ro_diff = avg_popularity_o - avg_popularity_r)
+adf <- adf %>% mutate(original_artist_famous = if_else(ro_diff > 0, 1, 0))
+
+# avg_popularityをパーセンタイルごとに区分けしてグループ化
+adf <- adf %>% mutate(avg_p_bin = cut(
+  avg_popularity_r,
+  breaks = c(
+    -1,
+    quantile(adf$avg_popularity_r, 0.25),
+    quantile(adf$avg_popularity_r, 0.5),
+    quantile(adf$avg_popularity_r, 0.75),
+    quantile(adf$avg_popularity_r, 1)
+  ),
+  labels = c('~25%', '26~50%', '51~75%', '~100%')
+))
+
+
+# リネーム
+adf <- adf %>% rename(
+  remixer_avg_popularity = avg_popularity_r,
+  origin_artist = main_artist,
+  diff_release_popularity = popularity_diff,
+  remixer_popularity_group = avg_p_bin,
+  origin_avg_popularity = avg_popularity_o,
+  diff_origin_popularity = ro_diff,
+  origin_artist_famous = original_artist_famous
+  )
+```
+
+# Remixとは
+
+楽曲をRemixするとは、既存の楽曲の音素材を編集し、新たな楽曲を生み出す手法である。 基本的に既存の楽曲アーティストとRemixアーティストは異なるため、互いの特徴が組み合わさり新しい音楽が生まれる素晴らしい手法だ。\
+また、昨今のSNSを活用した知名度向上の為の広報活動においても、1つの楽曲に対して関わるアーティストが増えるため、より良い戦略となる。
+
+ここで、**Remixアーティストが普段リリースしている楽曲と比べて、Remix楽曲はより聴かれるのだろうか**。という疑問が生じた。\
+そこで、[Spotify API](https://developer.spotify.com/documentation/web-api/)から得られるデータを用いてRemixアーティストの普段の楽曲とRemix楽曲の人気度を調べることにした。\
+人気度については、楽曲それぞれについてSpotifyが独自の計算で算出している[popularity](https://developer.spotify.com/documentation/web-api/reference/#/operations/get-track)を用いて比較する。
+\
+
+# 使用データ詳細
+
+CRANパッケージの[spotifyr](https://github.com/charlie86/spotifyr)を介してSpotify楽曲データを取得する。\
+Hardcore,Hardstyle等のジャンルをメインに手がける180アーティストを対象に、約4600曲のnon Remix楽曲と約700曲のRemix楽曲からpopularity値を集計。\
+最終的にRemixとnon Remixどちらにも存在するアーティストだけに絞り、601曲のRemix楽曲から人気度を比較した。 ソースコードについては各Rファイルを参照いただきたい。
+\
+
+
+## データ集計ルール {#データ集計ルール}
+
+それぞれ以下のルールを設けて集計している
+
+### non Remix楽曲
+
+1.  アーティストが1組のもの
+    a.  合作はNG
+2.  楽曲名&アーティスト名が被っているリリースはpopularityが大きい方を使用
+    a.  シングルリリース楽曲をアルバムに含める等で被りが生じる
+    b.  Edit, Cut Mixで被りが生じている楽曲も同様
+
+### Remix楽曲
+
+1.  楽曲名に「Remix」と記載のあるものを対象とする
+2.  楽曲名&アーティスト名が被っているリリースはpopularityが大きい方を使用
+
+### アーティストについて
+
+1.  non Remix楽曲はSpotify APIで取得した楽曲データのArtistを使用
+2.  Remix楽曲は楽曲名の「〇〇 Remix」の〇〇部分を抜き出して使用
+\
+
+
+# 人気度比較
+
+[データ集計ルール](#データ集計ルール)に基づき集計したものから、アーティスト単位で平均popularityを算出し、Remixアーティストの平均popularityとRemix楽曲のpopularityを比較した。
+
+使用データの先頭10行は以下のようになっている。
+
+```{r echo=FALSE}
+head(adf, 10)
+```
+
+各カラムの内容は以下のようになっている。
+
+```{r echo=FALSE}
+describe_df <- data.frame(
+  column_name = c(names(adf)),
+  意味 = c(
+    "Remixしたアーティスト",
+    "Remixしたアーティストの平均Popularity",
+    "Remix楽曲名",
+    "Popularity",
+    "楽曲リリース日",
+    "Remixされたアーティスト",
+    "Popularity(Remix楽曲 - Remixアーティスト)",
+    "remixer_avg_popularityをパーセンタイル4分割したグループ",
+    "Remixされたアーティストの平均Popularity",
+    "Popularity(Originアーティスト - Remixアーティスト)",
+    "OriginアーティストのほうがRemixアーティストより平均Popularityが高いか"
+  )
+)
+knitr::kable(describe_df)
+```
+\
+
+
+## 単純集計
+
+diff_release_popularity(Remix楽曲 - RemixアーティストのPopularity)について、分布を確認する。
+
+```{r echo=FALSE}
+data.frame(
+  diff_release_popularity = c(summary(adf$diff_release_popularity))
+)
+
+ggplot(data = adf, mapping = aes(x=diff_release_popularity)) +
+  theme_classic(base_size = 20, base_family = "sans") + 
+  stat_boxplot(lwd=1) + 
+  geom_boxplot(outlier.size = 2)
+```
+
+全体から各統計量を取った場合、Remix楽曲がRemixアーティストのPopularityよりも高くなるような結果は見られなかった。
+\
+
+## 元楽曲のアーティストがRemixアーティストよりも人気な場合
+
+`origin_artist_famous`カラムを用いて、**元楽曲のアーティストがRemixアーティストよりも人気**な場合、それをRemixしたアーティストのPopularityが高くなるのかを確認する。\
+尚、人気は平均Popularityで判断している。
+
+- 0 -> 元楽曲のアーティストがRemixアーティストより人気**でない**
+- 1 -> 元楽曲のアーティストがRemixアーティストより人気**である**
+
+
+```{r echo=FALSE}
+oaf_agg <- adf %>% 
+  select(diff_release_popularity, origin_artist_famous) %>% 
+  group_nest(origin_artist_famous) %>% 
+  mutate(s = map(data, ~ summary(.))) %>% 
+  pull(s, origin_artist_famous)
+
+data.frame(
+  group_0_diff_release_popularity = data.frame(oaf_agg$`0`)$Freq,
+  group_1_diff_release_popularity = data.frame(oaf_agg$`1`)$Freq
+)
+
+ggplot(data = adf, mapping = aes(x=diff_release_popularity, y=factor(origin_artist_famous), group=factor(origin_artist_famous), colour = factor(origin_artist_famous))) + 
+  theme_classic(base_size = 20, base_family = "sans") + 
+  stat_boxplot(lwd=1) + 
+  geom_boxplot(outlier.size = 2) + 
+  scale_fill_discrete(labels=c("group_0","group_1")) + 
+  theme(axis.title.y = element_blank()) + 
+  labs(color = "group")
+```
+
+`origin_artist_famous = 1`の場合、平均的に楽曲Popularityの値はRemixアーティスト平均Popularityより**上がる**傾向が見られた。\
+`origin_artist_famous = 0`の場合、平均的に楽曲Popularityの値はRemixアーティスト平均Popularityより**下がる**傾向が見られた。
+\
+
+
+## Remixアーティスト平均Popularityグループ別比較
+
+`remixer_popularity_group`(remixer_avg_popularityをパーセンタイル4分割したグループ)の変数を用いて、Remixアーティストの元々の人気度も加味し確認する。\
+パーセンタイル4分割の内訳は以下のようになっている。
+
+```{r echo=FALSE}
+summary_df <- data.frame(
+  remixer_avg_popularity = c(summary(adf$remixer_avg_popularity))
+)
+summary_df %>% filter(row_number() %in% c(1,2,3,5,6))
+```
+\
+
+上記4分割と`origin_artist_famous`を変数とした場合の`diff_release_popularity`の結果は以下のようになっている。
+
+```{r echo=FALSE}
+ogaf_agg <- data.frame(aggregate(diff_release_popularity ~ remixer_popularity_group + origin_artist_famous, adf, summary))
+ogaf_agg1 <- cbind(
+  ogaf_agg %>% select(remixer_popularity_group, origin_artist_famous),
+  data.frame(ogaf_agg$diff_release_popularity)  
+)
+ogaf_agg1
+
+ggplot(data = adf, mapping = aes(x=diff_release_popularity, y=remixer_popularity_group, group=remixer_popularity_group, colour = remixer_popularity_group)) + 
+  theme_classic(base_size = 20, base_family = "sans") + 
+  stat_boxplot(lwd=1) + 
+  geom_boxplot(outlier.size = 2) + 
+  theme(axis.title.y = element_blank(), legend.title = element_blank()) + 
+  facet_grid(origin_artist_famous ~ .) + 
+  par(pin = par(8, 3))
+```
+
+`origin_artist_famous`が0 or 1で逆の傾向が見えた。\
+Remixアーティストの人気度がRemixされたアーティストよりも相対的に**低い**場合は、Remixアーティストの人気度が絶対的に高くなっていくほどRemix楽曲の人気度は**上がりやすく**なる。\
+Remixアーティストの人気度がRemixされたアーティストよりも相対的に**高い**場合は、Remixアーティストの人気度が絶対的に高くなっていくほどRemix楽曲の人気度は**落ちやすく**なる。
+
+**Remixアーティストの人気度が下位25%(平均Popularityが3.52以下)かつ、Remixされるアーティストがそれよりも高い人気度の場合、Remix楽曲の人気度はRemixアーティストの人気度を上回ることが多そう**だ。\
+Remixアーティストの人気度を4分割し、X軸に`diff_origin_popularity`(Originアーティスト - RemixアーティストのPopularity), Y軸に`diff_release_popularity`(Remix楽曲 - RemixアーティストのPopularity)の散布図を描画したところ、
+Remixアーティストの人気度が~25%の左上グラフでは、`diff_origin_popularity`と`diff_release_popularity`の関係がほぼ線形になっている。
+```{r echo=FALSE}
+ggplot(data = adf, mapping = aes(x = diff_origin_popularity, y = diff_release_popularity, colour = remixer_popularity_group)) + 
+  theme_bw(base_size = 15, base_family = "sans") + 
+  geom_hline(yintercept = 0) + 
+  geom_point() + 
+  geom_smooth(method = 'loess', colour='black', alpha=0.4) +
+  theme(legend.position = "none") + 
+  facet_wrap( ~ remixer_popularity_group)
+```
+
+\
+
+
+## 実データの参照
+実際にどのような曲がリストされていたのか、条件別に一部抜き出して表示する。\
+`origin_artist_famous` x `remixer_popularity_group` の8パターンからそれぞれ5曲ずつランダムで選択。
+
+```{r echo=FALSE}
+
+dfs <- data.frame()
+for (i in c(unique(adf$origin_artist_famous))) {
+  for (g in c(sort(unique(adf$remixer_popularity_group)))) {
+    tmp_df <- adf %>% 
+      filter(origin_artist_famous == i) %>% 
+      filter(remixer_popularity_group == g)
+    dfs <- rbind(
+      dfs,
+      with_seed(1, sample_n(tmp_df, 5))
+    )
+  }
+}
+
+column_list <- c(
+  "track_name",
+  "popularity",
+  "release_date",
+  "origin_artist",
+  "origin_avg_popularity",
+  "remix_artist",
+  "remixer_avg_popularity",
+  "diff_release_popularity",
+  "diff_origin_popularity",
+  "remixer_popularity_group",
+  "origin_artist_famous"
+  )
+
+dfs %>% select(column_list)
+
+```
+\
+
+
+# 結果
+
+普段の人気度が低いアーティストであれば、**自分より高い人気度のアーティストの曲をRemixすることでより人気度の高い楽曲をリリースできる可能性がある**事が分かった。\
+当たり前かもしれないが、実際にデータを用いて確認することで事実として確証を持つことができた。\
+また、普段の人気度が高いアーティストの場合はRemixでより人気度の高い楽曲をリリースできるかもしれないが、ばらつきが大きくRemixされたアーティスト人気度との関係性も見られないので、人気度への影響はそこまでないのかもしれない。\
+
