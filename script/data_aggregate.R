@@ -169,7 +169,10 @@ column_list <- c(
 dfs %>% select(column_list)
 
 
-tmp <- data.frame(
-  remixer_avg_popularity = c(summary(adf$remixer_avg_popularity))
-)
-tmp
+tmp <- adf %>% 
+  filter(remixer_popularity_group == "~25%")
+unique(tmp$remix_artist)
+
+
+sdf <- read_csv(file = 'data/Spotify_Artist_list.csv')
+sdf
