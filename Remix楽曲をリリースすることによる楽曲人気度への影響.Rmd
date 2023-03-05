@@ -4,7 +4,7 @@ author: "nijigen-plot"
 date: '2023-02-26'
 output: 
   html_document:
-    df_print: kable
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
